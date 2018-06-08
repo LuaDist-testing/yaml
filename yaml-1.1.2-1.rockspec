@@ -1,16 +1,17 @@
 -- This file was automatically generated for the LuaDist project.
 
 package = "yaml"
-version = "1.1.1-1"
+version = "1.1.2-1"
 -- LuaDist source
 source = {
-  tag = "1.1.1-1",
+  tag = "1.1.2-1",
   url = "git://github.com/LuaDist-testing/yaml.git"
 }
 -- Original source
 -- source = {
 --   url = 'git://github.com/lubyk/yaml',
---   tag = 'REL-1.1.1',
+--   tag = 'REL-1.1.2',
+--   dir = 'yaml',
 -- }
 description = {
   summary = "Very fast yaml parser based on libYAML by Kirill Simonov",
@@ -30,7 +31,7 @@ description = {
 }
 
 dependencies = {
-  "lua >= 5.1, < 5.3",
+  "lua >= 5.1, < 5.4",
   "lub >= 1.0.3, < 2",
 }
 build = {
