@@ -1,6 +1,6 @@
 /*
  * lyaml.c, LibYAML binding for Lua
- * 
+ *
  * Copyright (c) 2009, Andrew Danforth <acd@weirdness.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -9,10 +9,10 @@
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -20,10 +20,10 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
- * 
- * Portions of this software were inspired by Perl's YAML::LibYAML module by 
+ *
+ * Portions of this software were inspired by Perl's YAML::LibYAML module by
  * Ingy döt Net <ingy@cpan.org>
- * 
+ *
  */
 
 #include <string.h>
@@ -50,6 +50,12 @@ static char Load_Nulls_As_Nil = 0;
 #define LUAYAML_KIND_SEQUENCE 1
 #define LUAYAML_KIND_MAPPING 2
 
+#if LUA_VERSION_NUM > 501
+#define COMPAT_GETN luaL_len
+#else
+#define COMPAT_GETN luaL_getn
+#endif
+
 #define RETURN_ERRMSG(s, msg) do { \
       lua_pushstring(s->L, msg); \
       s->error = 1; \
@@ -58,6 +64,11 @@ static char Load_Nulls_As_Nil = 0;
 
 struct lua_yaml_loader {
    lua_State *L;
+   /* Option to disable anchors in parsed data = safer
+      data parsing.
+      */
+   int no_anchor;
+
    int anchortable_index;
    int sequencemt_index;
    int mapmt_index;
@@ -81,6 +92,22 @@ struct lua_yaml_dumper {
 
 static int l_null(lua_State *);
 
+// [[lubyk
+// custom lua_isnumber to avoid relying on the locale (through strtod) to detect
+// floating point numbers.
+
+// Uses the same strtod as ruby from
+// Copyright (c) 1988-1993 The Regents of the University of California.
+// Copyright (c) 1994 Sun Microsystems, Inc.
+double strtod_no_locale(const char *string, char **endPtr);
+
+static int lua_isnumber_no_locale(const char *str, int len, lua_Number *nb) {
+  char *endptr;
+  *nb = strtod_no_locale(str, &endptr);
+  return endptr != str;
+}
+// lubyk]]
+
 static void generate_error_message(struct lua_yaml_loader *loader) {
    char buf[256];
    luaL_Buffer b;
@@ -88,11 +115,11 @@ static void generate_error_message(struct lua_yaml_loader *loader) {
    luaL_buffinit(loader->L, &b);
 
    luaL_addstring(&b, loader->parser.problem ? loader->parser.problem : "A problem");
-   snprintf(buf, sizeof(buf), " at document: %d", loader->document_count);
+   snprintf(buf, sizeof(buf), " at document: %i", loader->document_count);
    luaL_addstring(&b, buf);
 
    if (loader->parser.problem_mark.line || loader->parser.problem_mark.column) {
-      snprintf(buf, sizeof(buf), ", line: %d, column: %d\n",
+      snprintf(buf, sizeof(buf), ", line: %li, column: %li\n",
          loader->parser.problem_mark.line + 1,
          loader->parser.problem_mark.column + 1);
       luaL_addstring(&b, buf);
@@ -101,7 +128,7 @@ static void generate_error_message(struct lua_yaml_loader *loader) {
    }
 
    if (loader->parser.context) {
-      snprintf(buf, sizeof(buf), "%s at line: %d, column: %d\n",
+      snprintf(buf, sizeof(buf), "%s at line: %li, column: %li\n",
          loader->parser.context,
          loader->parser.context_mark.line + 1,
          loader->parser.context_mark.column + 1);
@@ -134,7 +161,7 @@ static int load_node(struct lua_yaml_loader *loader);
 
 static void handle_anchor(struct lua_yaml_loader *loader) {
    const char *anchor = (char *)loader->event.data.scalar.anchor;
-   if (!anchor)
+   if (!anchor || loader->no_anchor)
       return;
 
    lua_pushstring(loader->L, anchor);
@@ -223,12 +250,12 @@ static void load_scalar(struct lua_yaml_loader *loader) {
    }
 
    lua_pushlstring(loader->L, str, length);
+   lua_Number n;
 
    /* plain scalar and Lua can convert it to a number?  make it so... */
    if (Load_Numeric_Scalars
       && loader->event.data.scalar.style == YAML_PLAIN_SCALAR_STYLE
-      && lua_isnumber(loader->L, -1)) {
-      lua_Number n = lua_tonumber(loader->L, -1);
+      && lua_isnumber_no_locale(str, length, &n)) {
       lua_pop(loader->L, 1);
       lua_pushnumber(loader->L, n);
    }
@@ -270,7 +297,11 @@ static int load_node(struct lua_yaml_loader *loader) {
          return 1;
 
       case YAML_ALIAS_EVENT:
-         load_alias(loader);
+         if (loader->no_anchor) {
+           lua_pushnil(loader->L);
+         } else {
+           load_alias(loader);
+         }
          return 1;
 
       case YAML_NO_EVENT:
@@ -310,9 +341,11 @@ static void load(struct lua_yaml_loader *loader) {
       if (loader->event.type != YAML_DOCUMENT_END_EVENT)
          RETURN_ERRMSG(loader, "expected DOCUMENT_END_EVENT");
 
-      /* reset anchor table */ 
-      lua_newtable(loader->L);
-      lua_replace(loader->L, loader->anchortable_index);
+      if (!loader->no_anchor) {
+        /* reset anchor table */
+        lua_newtable(loader->L);
+        lua_replace(loader->L, loader->anchortable_index);
+      }
    }
 }
 
@@ -320,9 +353,17 @@ static int l_load(lua_State *L) {
    struct lua_yaml_loader loader;
    int top = lua_gettop(L);
 
-   luaL_argcheck(L, lua_isstring(L, 1), 1, "must provide a string argument");
+   size_t str_sz;
+   const char *str = luaL_checklstring(L, 1, &str_sz);
 
    loader.L = L;
+   if (lua_toboolean(L, 2)) {
+     // safe loading
+     loader.no_anchor = 1;
+   } else {
+     loader.no_anchor = 0;
+   }
+
    loader.validevent = 0;
    loader.error = 0;
    loader.document_count = 0;
@@ -344,13 +385,14 @@ static int l_load(lua_State *L) {
       loader.mapmt_index = top + 2;
    }
 
-   /* create table used to track anchors */
-   lua_newtable(L);
-   loader.anchortable_index = lua_gettop(L);
+   if (!loader.no_anchor) {
+     /* create table used to track anchors */
+     lua_newtable(L);
+     loader.anchortable_index = lua_gettop(L);
+   }
 
    yaml_parser_initialize(&loader.parser);
-   yaml_parser_set_input_string(&loader.parser,
-      (const unsigned char *)lua_tostring(L, 1), lua_strlen(L, 1));
+   yaml_parser_set_input_string(&loader.parser, (unsigned char*)str, str_sz);
    load(&loader);
 
    delete_event(&loader);
@@ -398,7 +440,9 @@ static int dump_scalar(struct lua_yaml_dumper *dumper) {
    } else if (type == LUA_TNUMBER) {
       /* have Lua convert number to a string */
       str = lua_tolstring(dumper->L, -1, &len);
-   } else if (type == LUA_TBOOLEAN) {
+   } else {
+     // we only arrive in dump_scalar if type is string, boolean or number
+     // type == LUA_TBOOLEAN
       if (lua_toboolean(dumper->L, -1)) {
          str = "true";
          len = 4;
@@ -470,7 +514,11 @@ static int dump_table(struct lua_yaml_dumper *dumper) {
 }
 
 static int dump_array(struct lua_yaml_dumper *dumper) {
+#if LUA_VERSION_NUM > 501
+   int i, n = luaL_len(dumper->L, -1);
+#else
    int i, n = luaL_getn(dumper->L, -1);
+#endif
    yaml_event_t ev;
    yaml_char_t *anchor = get_yaml_anchor(dumper);
 
@@ -533,7 +581,12 @@ static int dump_node(struct lua_yaml_dumper *dumper) {
          type = figure_table_type(dumper->L);
 
       if (type == LUAYAML_KIND_UNKNOWN && Dump_Auto_Array &&
+#if LUA_VERSION_NUM > 501
+          luaL_len(dumper->L, -1) > 0) {
+#else
           luaL_getn(dumper->L, -1) > 0) {
+#endif
+
          type = LUAYAML_KIND_SEQUENCE;
       }
 
@@ -569,7 +622,7 @@ static void dump_document(struct lua_yaml_dumper *dumper) {
    yaml_emitter_emit(&dumper->emitter, &ev);
 }
 
-static int append_output(void *arg, unsigned char *buf, unsigned int len) {
+static int append_output(void *arg, unsigned char *buf, size_t len) {
    struct lua_yaml_dumper *dumper = (struct lua_yaml_dumper *)arg;
    luaL_addlstring(&dumper->yamlbuf, (char *)buf, len);
    return 1;
@@ -708,15 +761,24 @@ static int l_null(lua_State *L) {
    return 1;
 }
 
-LUALIB_API int luaopen_yaml(lua_State *L) {
-   const luaL_reg yamllib[] = {
-      { "load", l_load },
-      { "dump", l_dump },
-      { "configure", l_config },
-      { "null", l_null },
-      { NULL, NULL}
-   };
+const luaL_Reg yaml_functions[] = {
+  { "load", l_load },
+  { "dump", l_dump },
+  { "configure", l_config },
+  { "null", l_null },
+  { NULL, NULL}
+};
 
-   luaL_openlib(L, "yaml", yamllib, 0);
-   return 1;
+LUALIB_API int luaopen_yaml_core(lua_State *L) {
+  lua_newtable(L);
+  // <lib>
+
+#if LUA_VERSION_NUM > 501
+  luaL_setfuncs(L, yaml_functions, 0);
+#else
+  luaL_register(L, NULL, yaml_functions);
+#endif
+
+  // <lib>
+  return 1;
 }
