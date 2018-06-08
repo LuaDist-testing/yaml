@@ -1,37 +1,29 @@
--- This file was automatically generated for the LuaDist project.
-
 package = "yaml"
-version = "1.0.0-1"
--- LuaDist source
+version = "1.1.0-1"
 source = {
-  tag = "1.0.0-1",
-  url = "git://github.com/LuaDist-testing/yaml.git"
+  url = 'https://github.com/lubyk/yaml/archive/REL-1.1.0.tar.gz',
+  dir = 'yaml-REL-1.1.0',
 }
--- Original source
--- source = {
---   url = 'https://github.com/lubyk/yaml/archive/REL-1.0.0.tar.gz',
---   dir = 'yaml-REL-1.0.0',
--- }
 description = {
   summary = "Very fast yaml parser based on libYAML by Kirill Simonov",
   detailed = [[
-    This module is a Lua binding for Kirill Siminov's excellent LibYAML. LibYAML is generally considered to be the best C YAML 1.1 implementation.
+  This module is a Lua binding for Kirill Siminov's excellent LibYAML. LibYAML is generally considered to be the best C YAML 1.1 implementation.
 
-    Main features are:
-     - Fast and easy to use
-     - Based on proven code (libYAML)
-     - Support for table loops
-     - No external dependencies
+  Main features are:
+   - Fast and easy to use
+   - Based on proven code (libYAML)
+   - Support for table loops
+   - No external dependencies
 
-     Read the documentation at http://doc.lubyk.org/yaml.html.
-    ]],
+   Read the documentation at http://doc.lubyk.org/yaml.html.
+  ]],
   homepage = "http://doc.lubyk.org/yaml.html",
   license = "MIT"
 }
 
 dependencies = {
   "lua >= 5.1, < 5.3",
-  "lub >= 1.0.3, < 1.1",
+  "lub >= 1.0.3, < 2",
 }
 build = {
   type = 'builtin',
